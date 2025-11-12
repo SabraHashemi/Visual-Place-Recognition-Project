@@ -75,11 +75,6 @@ python reranking.py \
 ## Perform Uncertainty Evalutation [only for AML students]
 
 
-## Run on Google Colab
-Click the badge to open the demo notebook in Colab:
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SabraHashemi/Visual-Place-Recognition-Project/blob/develop/start_your_project.ipynb)
-
 
 ```sh
 python -m vpr_uncertainty.eval \
@@ -87,3 +82,13 @@ python -m vpr_uncertainty.eval \
 --inliers-dir '<path-to-inliers-folder>' \
 --z-data-path '<path-to-z-data-file>'
 ```
+
+
+
+
+
+## Run on Google Colab
+Click the badge to open the demo notebook in Colab:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SabraHashemi/Visual-Place-Recognition-Project/blob/main/start_your_project.ipynb)
+
