@@ -15,6 +15,14 @@ import visualizations
 import vpr_models
 from test_dataset import TestDataset
 
+# Import wandb logger (optional)
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from wandb_logging import WandBLogger
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 
 def main(args):
     start_time = datetime.now()
@@ -30,6 +38,28 @@ def main(args):
         f"Testing with {args.method} with a {args.backbone} backbone and descriptors dimension {args.descriptors_dimension}"
     )
     logger.info(f"The outputs are being saved in {log_dir}")
+
+    # Initialize wandb logger
+    wandb_logger = None
+    if WANDB_AVAILABLE:
+        experiment_name = f"{args.method}_{args.backbone}_{start_time.strftime('%Y%m%d_%H%M%S')}"
+        config = {
+            "method": args.method,
+            "backbone": args.backbone,
+            "descriptors_dimension": args.descriptors_dimension,
+            "batch_size": args.batch_size,
+            "num_workers": args.num_workers,
+            "image_size": args.image_size,
+            "positive_dist_threshold": args.positive_dist_threshold,
+            "recall_values": args.recall_values,
+            "device": args.device,
+            "log_dir": str(log_dir),
+        }
+        wandb_logger = WandBLogger(
+            project_name="vpr-evaluation",
+            experiment_name=experiment_name,
+            config=config
+        )
 
     model = vpr_models.get_model(args.method, args.backbone, args.descriptors_dimension)
     model = model.eval().to(args.device)
@@ -95,6 +125,11 @@ def main(args):
         recalls = recalls / test_ds.num_queries * 100
         recalls_str = ", ".join([f"R@{val}: {rec:.1f}" for val, rec in zip(args.recall_values, recalls)])
         logger.info(recalls_str)
+        
+        # Log recalls to wandb
+        if wandb_logger:
+            metrics = {f"recall@{val}": float(rec) for val, rec in zip(args.recall_values, recalls)}
+            wandb_logger.log_metrics(metrics)
 
     # Save visualizations of predictions
     if args.num_preds_to_save != 0:
@@ -112,6 +147,10 @@ def main(args):
         z_data['distances'] = distances
 
         torch.save(z_data, log_dir / "z_data.torch")
+    
+    # Finish wandb logging
+    if wandb_logger:
+        wandb_logger.finish()
 
 if __name__ == "__main__":
     args = parser.parse_arguments()
