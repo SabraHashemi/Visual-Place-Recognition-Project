@@ -7,6 +7,15 @@ import torch
 
 from util import get_list_distances_from_preds
 
+# Import wandb logger (optional)
+try:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from wandb_logging import WandBLogger
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
     
@@ -36,6 +45,29 @@ def main(args):
     threshold = args.positive_dist_threshold
     recall_values = args.recall_values
 
+    # Initialize wandb logger
+    wandb_logger = None
+    if WANDB_AVAILABLE:
+        # Try to infer matcher name from inliers folder name (e.g., "log_dir_superpoint-lg")
+        matcher_name = "unknown"
+        if "_" in str(inliers_folder.name):
+            matcher_name = "_".join(str(inliers_folder.name).split("_")[1:])
+        
+        config = {
+            "matcher": matcher_name,
+            "num_preds": num_preds,
+            "positive_dist_threshold": threshold,
+            "recall_values": recall_values,
+            "preds_dir": str(preds_folder),
+            "inliers_dir": str(inliers_folder),
+        }
+        experiment_name = f"reranking_{matcher_name}"
+        wandb_logger = WandBLogger(
+            project_name="vpr-evaluation",
+            experiment_name=experiment_name,
+            config=config
+        )
+
     txt_files = glob(os.path.join(preds_folder, "*.txt"))
     txt_files.sort(key=lambda x: int(Path(x).stem))
 
@@ -61,6 +93,12 @@ def main(args):
     recalls_str = ", ".join([f"R@{val}: {rec:.1f}" for val, rec in zip(recall_values, recalls)])
 
     print(recalls_str)
+    
+    # Log reranking recalls to wandb
+    if wandb_logger:
+        metrics = {f"rerank_recall@{val}": float(rec) for val, rec in zip(recall_values, recalls)}
+        wandb_logger.log_metrics(metrics)
+        wandb_logger.finish()
 
 if __name__ == "__main__":
     args = parse_arguments()
