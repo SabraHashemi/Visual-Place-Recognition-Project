@@ -97,13 +97,17 @@ class MixVPR(nn.Module):
 class ResNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.model = torchvision.models.resnet50()
+
+        try:
+            weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V2
+        except AttributeError:
+            # Fallback for older torchvision versions
+            weights = None
+
+        self.model = torchvision.models.resnet50(weights=weights)
         # remove the avgpool and most importantly the fc layer
         self.model.avgpool = nn.Identity()
         self.model.fc = nn.Identity()
-        out_channels = 2048
-        self.out_channels = out_channels // 2 if self.model.layer4 is None else out_channels
-        self.out_channels = self.out_channels // 2 if self.model.layer3 is None else self.out_channels
 
     def forward(self, x1):
         x = self.model.conv1(x1)
@@ -146,8 +150,12 @@ def get_mixvpr(descriptors_dimension):
     if not os.path.exists(file_path):
         os.makedirs("trained_models/mixvpr", exist_ok=True)
         gdown.download(url=url, output=file_path, fuzzy=True)
-    state_dict = torch.load(file_path)
-    model.load_state_dict(state_dict)
+    state_dict = torch.load(file_path, map_location="cpu")
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"[MixVPR] Missing keys ignored while loading checkpoint: {missing}")
+    if unexpected:
+        print(f"[MixVPR] Unexpected keys ignored while loading checkpoint: {unexpected}")
     model = model.eval()
 
     return model
