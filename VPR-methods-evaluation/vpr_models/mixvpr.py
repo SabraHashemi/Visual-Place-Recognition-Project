@@ -160,7 +160,7 @@ class ResNet(nn.Module):
         return x
 
 class MixVPRModel(torch.nn.Module):
-    def __init__(self, agg_config={}, , backbone_cfg=None):
+    def __init__(self, agg_config={},  backbone_cfg=None):
         super().__init__()
         if backbone_cfg is None:
             backbone_cfg = {'model_name': 'resnet50', 'pretrained': True, 'layers_to_freeze': 2, 'layers_to_crop': [4]}
