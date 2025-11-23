@@ -93,81 +93,74 @@ class MixVPR(nn.Module):
 ### Implement ResNet-50 here for MixVPR model,
 ### otherwise `self.backbone = ResNet()` will fail
 ### (academic purpose)
-# This is the minimal ResNet wrapper used by MixVPR (from the original repo).
-# It instantiates torchvision's ResNet variants, removes avgpool/fc, supports freezing
-# initial layers and cropping layer3/layer4 if you want a lower-channel output.
+
+
 class ResNet(nn.Module):
-    def __init__(self,
-                 model_name='resnet50',
-                 pretrained=True,
-                 layers_to_freeze=2,
-                 layers_to_crop=[],
-                 ):
-        """
-        Args:
-            model_name (str): e.g. 'resnet50'
-            pretrained (bool): use ImageNet weights if True
-            layers_to_freeze (int): freeze first N residual blocks (0..4)
-            layers_to_crop (list): indices of residual layers to remove (e.g. [4] to remove layer4)
-        """
+    """
+    ResNet-50 backbone wrapper that returns feature maps from layer3 (stride 16).
+    For input images resized to 320x320 the returned feature map will be ~20x20 with 1024 channels,
+    which matches MixVPR's expected in_channels/in_h/in_w settings.
+    """
+
+    def __init__(self, pretrained=False):
         super().__init__()
-        self.model_name = model_name.lower()
-        self.layers_to_freeze = layers_to_freeze
 
-        # torchvision new weights API uses strings such as 'IMAGENET1K_V1'
-        if pretrained:
-            weights = 'IMAGENET1K_V1'
-        else:
-            weights = None
-
-        if 'swsl' in model_name or 'ssl' in model_name:
-            # optional alternative weight source (facebook semi-supervised)
-            self.model = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', model_name)
-        else:
-            if 'resnext50' in model_name:
-                self.model = torchvision.models.resnext50_32x4d(weights=weights)
-            elif 'resnet50' in model_name:
-                self.model = torchvision.models.resnet50(weights=weights)
-            elif '101' in model_name:
-                self.model = torchvision.models.resnet101(weights=weights)
-            elif '152' in model_name:
-                self.model = torchvision.models.resnet152(weights=weights)
-            elif '34' in model_name:
-                self.model = torchvision.models.resnet34(weights=weights)
-            elif '18' in model_name:
-                self.model = torchvision.models.resnet18(weights=weights)
-            elif 'wide_resnet50_2' in model_name:
-                self.model = torchvision.models.wide_resnet50_2(weights=weights)
+        # Support different torchvision versions' API for loading weights
+        try:
+            # newer torchvision: resnet50(weights=...)
+            if pretrained:
+                # use default pretrained weights
+                resnet = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.DEFAULT)
             else:
-                raise NotImplementedError('Backbone architecture not recognized!')
+                resnet = torchvision.models.resnet50(weights=None)
+        except Exception:
+            # fallback for older torchvision that uses pretrained flag
+            resnet = torchvision.models.resnet50(pretrained=pretrained)
 
-        # freeze only if the model is pretrained
-        if pretrained:
-            if layers_to_freeze >= 0:
-                self.model.conv1.requires_grad_(False)
-                self.model.bn1.requires_grad_(False)
-            if layers_to_freeze >= 1:
-                self.model.layer1.requires_grad_(False)
-            if layers_to_freeze >= 2:
-                self.model.layer2.requires_grad_(False)
-            if layers_to_freeze >= 3:
-                self.model.layer3.requires_grad_(False)
+        # Build a trunk up to layer3 (inclusive). layer3 output has 1024 channels and stride 16.
+        self.stem = nn.Sequential(
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool,
+        )
+        self.layer1 = resnet.layer1  # output stride still /4
+        self.layer2 = resnet.layer2  # output stride /8
+        self.layer3 = resnet.layer3  # output stride /16
 
-        # remove the avgpool and fc layers (we want the conv feature maps)
-        self.model.avgpool = None
-        self.model.fc = None
+        # We do not include layer4 because that would downsample to /32 (10x10 for 320 input)
+        # If pretrained weights are used, they are already loaded into the modules above.
 
+        # Optional: initialize missing parameters if any (usually not needed when using torchvision)
+        # but keep for safety.
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                # follow torchvision initialization (Kaiming)
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        """
+        x: tensor (B, C, H, W) - expected to be already resized (the caller resizes to 320x320)
+        returns: feature map tensor (B, 1024, H', W') where H' ~= H/16, W' ~= W/16
+        """
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
         return x
 
+
 class MixVPRModel(torch.nn.Module):
-    def __init__(self, agg_config={},  backbone_cfg=None):
+    def __init__(self, agg_config={}):
         super().__init__()
-        if backbone_cfg is None:
-            backbone_cfg = {'model_name': 'resnet50', 'pretrained': True, 'layers_to_freeze': 2, 'layers_to_crop': [4]}
-        self.backbone = ResNet(**backbone_cfg)
+        self.backbone = ResNet()
         self.aggregator = MixVPR(**agg_config)
 
     def forward(self, x):
+        # Resize to the expected input resolution used when training MixVPR models
         x = transforms.Resize([320, 320], antialias=True)(x)
         x = self.backbone(x)
         x = self.aggregator(x)
@@ -185,8 +178,7 @@ def get_mixvpr(descriptors_dimension):
         "mlp_ratio": 1,
         "out_rows": out_rows,
     }
-    backbone_cfg = {'model_name': 'resnet50', 'pretrained': True, 'layers_to_freeze': 2, 'layers_to_crop': [4]}
-    model = MixVPRModel(agg_config=model_config, backbone_cfg=backbone_cfg)
+    model = MixVPRModel(agg_config=model_config)
     file_path = f"trained_models/mixvpr/{filename}"
     if not os.path.exists(file_path):
         os.makedirs("trained_models/mixvpr", exist_ok=True)
