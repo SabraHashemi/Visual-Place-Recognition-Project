@@ -97,59 +97,46 @@ class MixVPR(nn.Module):
 
 class ResNet(nn.Module):
     """
-    ResNet-50 backbone wrapper that returns feature maps from layer3 (stride 16).
-    For input images resized to 320x320 the returned feature map will be ~20x20 with 1024 channels,
-    which matches MixVPR's expected in_channels/in_h/in_w settings.
+    ResNet-50 wrapper that keeps the torchvision model under `self.model`.
+    Many saved checkpoints expect keys like `backbone.model.*`, so exposing the
+    full torchvision model as `model` makes state_dict keys match those checkpoints.
+
+    The forward() returns features from layer3 (stride 16), which for a 320x320
+    input produces ~20x20 feature maps with 1024 channels (matches MixVPR expectations).
     """
 
     def __init__(self, pretrained=False):
         super().__init__()
 
-        # Support different torchvision versions' API for loading weights
+        # Load torchvision's resnet50. Support both older and newer torchvision APIs.
         try:
-            # newer torchvision: resnet50(weights=...)
             if pretrained:
-                # use default pretrained weights
                 resnet = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.DEFAULT)
             else:
                 resnet = torchvision.models.resnet50(weights=None)
         except Exception:
-            # fallback for older torchvision that uses pretrained flag
+            # fallback for torchvision versions using `pretrained=` argument
             resnet = torchvision.models.resnet50(pretrained=pretrained)
 
-        # Build a trunk up to layer3 (inclusive). layer3 output has 1024 channels and stride 16.
-        self.stem = nn.Sequential(
-            resnet.conv1,
-            resnet.bn1,
-            resnet.relu,
-            resnet.maxpool,
-        )
-        self.layer1 = resnet.layer1  # output stride still /4
-        self.layer2 = resnet.layer2  # output stride /8
-        self.layer3 = resnet.layer3  # output stride /16
+        # Keep the full ResNet model under the attribute name `model`.
+        # This matches checkpoints that have keys like "backbone.model.conv1.weight".
+        self.model = resnet
 
-        # We do not include layer4 because that would downsample to /32 (10x10 for 320 input)
-        # If pretrained weights are used, they are already loaded into the modules above.
-
-        # Optional: initialize missing parameters if any (usually not needed when using torchvision)
-        # but keep for safety.
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                # follow torchvision initialization (Kaiming)
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+        # Do NOT reinitialize weights here; loading a checkpoint will overwrite them.
+        # If you want to create a smaller/specific trunk you could copy layers, but here we
+        # keep the original attribute names to match existing checkpoints.
 
     def forward(self, x):
-        """
-        x: tensor (B, C, H, W) - expected to be already resized (the caller resizes to 320x320)
-        returns: feature map tensor (B, 1024, H', W') where H' ~= H/16, W' ~= W/16
-        """
-        x = self.stem(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
+        # Replicate the standard forward up to layer3 (exclude layer4 / avgpool / fc)
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+
         return x
 
 
