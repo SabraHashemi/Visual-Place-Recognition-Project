@@ -98,11 +98,13 @@ class MixVPR(nn.Module):
 class ResNet(nn.Module):
     """
     ResNet-50 wrapper that keeps the torchvision model under `self.model`.
-    Many saved checkpoints expect keys like `backbone.model.*`, so exposing the
-    full torchvision model as `model` makes state_dict keys match those checkpoints.
+    Many saved checkpoints expect keys like "backbone.model.*". The forward()
+    returns features from layer3 (stride 16), which for a 320x320 input produces
+    ~20x20 feature maps with 1024 channels (matches MixVPR expectations).
 
-    The forward() returns features from layer3 (stride 16), which for a 320x320
-    input produces ~20x20 feature maps with 1024 channels (matches MixVPR expectations).
+    To be compatible with checkpoints that do NOT include parameters for layer4/fc,
+    layer4 and fc are replaced with identity modules so the model does not expect
+    parameters for them when loading state_dicts.
     """
 
     def __init__(self, pretrained=False):
@@ -122,9 +124,14 @@ class ResNet(nn.Module):
         # This matches checkpoints that have keys like "backbone.model.conv1.weight".
         self.model = resnet
 
-        # Do NOT reinitialize weights here; loading a checkpoint will overwrite them.
-        # If you want to create a smaller/specific trunk you could copy layers, but here we
-        # keep the original attribute names to match existing checkpoints.
+        # The MixVPR aggregator expects features from layer3 (1024 channels).
+        # Some checkpoints were saved without layer4/fc parameters. If layer4/fc
+        # exist with parameters in our model, load_state_dict will expect their keys.
+        # Replace them with Identity modules so no parameters are required for them.
+        # This preserves the attribute names so checkpoint keys that reference
+        # "backbone.model.<...>" still match.
+        self.model.layer4 = nn.Identity()
+        self.model.fc = nn.Identity()
 
     def forward(self, x):
         # Replicate the standard forward up to layer3 (exclude layer4 / avgpool / fc)
