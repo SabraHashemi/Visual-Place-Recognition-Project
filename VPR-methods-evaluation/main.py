@@ -104,7 +104,7 @@ def main(args):
         np.save(log_dir / "database_descriptors.npy", database_descriptors)
 
     # Use a kNN to find predictions
-    faiss_index = faiss.IndexFlatIP(args.descriptors_dimension)
+    faiss_index = faiss.IndexFlatL2(args.descriptors_dimension)
     faiss_index.add(database_descriptors)
     del database_descriptors, all_descriptors
 
